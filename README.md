@@ -1,0 +1,122 @@
+# PhotoSync
+
+自用、單向：iPhone 相簿 → NAS SMB 共享。完整需求見 [personal-sync-tool-plan.md](personal-sync-tool-plan.md)。
+
+## 結構
+
+| 目標 | 內容 | 平台 |
+| --- | --- | --- |
+| `SyncCore` | 範本引擎、衝突解析、同步引擎、log。只依賴 Foundation，靠 `SMBClient`／`PhotoSource` 兩個協定隔離外部世界 | macOS / iOS |
+| `SMBAdapter` | 用 AMSMB2 實作 `SMBClient` | macOS / iOS |
+| `PhotoSource` | 用 PhotoKit／ImageIO／AVFoundation 實作 `PhotoSource`；`CaptureOffset` 解析拍攝時區 | macOS / iOS |
+| `App/` | SwiftUI 殼：設定、進度、log、Keychain、背景任務（`PhotoSync.xcodeproj`） | iOS |
+
+## 實作時對計畫書的取捨
+
+- 本機檔案大小：公開 PhotoKit 沒有 size，使用 `PHAssetResource` 的 `fileSize` KVC（未公開，自用 App 可接受）。
+  取不到、或有轉檔（HEIC→JPEG、影片轉碼）時 size 視為未知。
+- 衝突解析會沿著 `name`、`name_1`、`name_2`… 找。遠端同名檔「是不是這個項目自己的」用下列規則判斷，是才跳過，否則換下一個後綴：
+  1. 本機 size 已知且和遠端相同 → 是。
+  2. 本機 size 已知、但和遠端不同：遠端修改時間若不是拍攝時間（±2 秒）→ 不是；若吻合 → 不確定（`fileSize` 可能和實際匯出的檔案不同），
+     這時匯出檔案一次、比對實際位元組數。相同才是。匯出的暫存檔會留給後面的上傳用，不會匯出兩次。
+     代價：這類項目每輪都要重新匯出一次（不會重傳）。光看時間不夠：拍攝時間命名下，同名本來就只會發生在同一秒拍的照片，時間一定吻合。
+  3. 本機 size 未知（轉檔）：遠端修改時間吻合才是。拍攝時間命名下，同一秒拍的兩張轉檔照片因此分不出來，可能誤認。
+  4. 例外：size 未知、又沒有寫入拍攝時間可比（關掉寫入、或遠端沒給修改時間）時，只能比檔名。
+     這時若同名的舊檔被刪除，新照片可能被誤認成已同步。要避免就保持「寫入拍攝時間」開啟。
+  NAS 若不支援寫入時間，本輪結束會在紀錄裡留一筆警告，否則 size 未知的檔案每輪都會多傳一份。
+- 同一輪內已被別的檔案佔用的目標名（跳過／覆蓋策略）：這個項目不上傳、不算已同步，紀錄會寫原因。
+- `%ID` 取 `localIdentifier` 斜線前的 UUID。`%IP` 是由 `localIdentifier`＋資源 key 雜湊出的固定整數（0–9999，不補零），
+  不管相簿裡其他項目增減，同一個項目永遠拿到同一個值；撞號時仍由後綴鏈處理。它不是連號。
+- 同名、同 size、但內容不同的兩個檔案會被當成同一個（刻意取捨，機率極低）。
+- 影片轉碼用 `AVAssetExportPreset1920x1080`（保證 H.264，但最大 1080p）。計畫書的 `HighestQuality` 會沿用原編碼（HEVC 仍是 HEVC），不算轉 H.264。
+- 設定項目比計畫書 §4 的「≤10」多：M4 開關、SMB3 加密、寫入時間戳、子目錄範本都是計畫書其他章節要求的。
+- `%AP` 相簿名稱：一張照片只會落在一個相簿資料夾。規則是只看使用者自己建的相簿（`albumRegular`，QQ、X 這類 App 建的也算；
+  智慧相簿、共享相簿、匯入相簿不算），同一張照片在多個相簿時取「名稱排序最前」的那個（名稱相同再比 ID，與 PhotoKit 回傳順序無關）；
+  不在任何相簿的照片放進固定名稱「最近項目」（寫死，不跟系統語言走，否則換語言會整批重傳）。隱藏相簿不參與。
+  只有範本用到 `%AP` 時才會去列舉相簿。限制：照片之後被加進另一個相簿、或相簿改名，路徑就變了，遠端比對找不到，會重傳到新資料夾，舊的那份留在 NAS；
+  受限存取下查不到的相簿也會讓照片先落到「最近項目」，之後移位。
+- `%DP` 在 iOS 16 之後只會是「iPhone」這類通用名稱，要拿到使用者設定的裝置名稱需要 Apple 核發的 `user-assigned-device-name` entitlement。
+- 子目錄範本的預設清單在 `SubdirectoryPreset`；設定頁的範例路徑用 `NameTemplate.render` 加固定的範例資料算出來，不是寫死的字串。
+  目前選到哪個預設只看範本字串，「自訂」另外用畫面上的狀態記住，所以自訂內容剛好等於某個預設時，欄位仍會留著。
+- 遠端根目錄用資料夾瀏覽器選（`App/Views.swift` 的 `RemoteFolderPicker`）：以目前設定連線，只列非 `.` 開頭的資料夾，
+  按「選擇」才寫入設定。
+- 檔名比對一律不分大小寫（一般 SMB 共享不分大小寫），改副檔名大小寫設定不會整批重傳。
+- 上傳前先刪掉同名 `.part`：AMSMB2 用 `O_EXCL` 建檔，上次被強制結束留下的殘檔會讓之後每次都失敗。
+- 覆蓋策略：先把舊檔搬到 `.<名字>.bak`，新檔搬進去成功才刪備份；搬不進去就把舊檔搬回來，不會讓這個名字變空。
+- 匯出（可能含 iCloud 下載、轉碼）每個檔案只做一次，重試只重傳。連線中斷（`ENOTCONN`／`EPIPE`／`ECONNRESET`／`ETIMEDOUT`）
+  或連續 5 個檔案上傳失敗就停止本輪，剩下的項目維持未同步。AMSMB2 不會自動重連。
+- 取消：AMSMB2 的上傳在 progress 回 `false` 時只會中斷迴圈再 `fsync`，不丟錯誤。所以 `AMSMBClient.upload` 取消後一律丟 `CancellationError`，
+  引擎在搬成正式檔名之前也會再檢查取消，截斷的 `.part` 不會被改名。
+- **拍攝當下時區**：檔名與子目錄的日期用「拍攝當下當地時間」。PHAsset 沒有公開的時區欄位，所以改從檔案內讀 UTC 偏移：
+  照片取 EXIF `OffsetTimeOriginal`（或 `OffsetTime`），影片取 QuickTime `creationdate`。
+  讀到的偏移按項目存在 `Documents/capture-offsets.json`，之後不再重讀；讀不到的項目一律用「備用時區」（第一次啟動時記下當時的裝置時區並存進設定，之後不再跟著裝置變）。
+  只有檔名／子目錄範本用到日期 token 時才會去讀，預設「保留原檔名」完全不花這個成本。
+  已在模擬器用自製 HEIC（EXIF `+09:00`）驗證：檔名採用 EXIF 當地時間。完整的 HEIC 要以 `final: true` 讀才讀得到 EXIF（`CaptureOffsetTests` 有涵蓋）。
+  限制：只讀檔案開頭的資料（照片最多 1 MB），EXIF 區塊不在其中、或影片在 iCloud 上未下載時會落到備用時區；
+  備用時區也是「已同步」指紋的一部分。
+- 「已同步」集合綁一個指紋：主機、共享、遠端根目錄（`/` 與空字串視為相同）、有效檔名範本、子目錄範本、HEIC→JPEG、影片轉碼、Live Photo、備用時區。
+  指紋一變，集合清空、縮圖全部回到藍框，下一次同步用遠端 diff 重新標記。副檔名大小寫、隱藏相簿、衝突策略不在指紋裡。
+- 失敗（或被占用而沒上傳）的項目會從已同步集合移除，不會維持灰框。
+- 隱藏相簿 ID 若已不存在（相簿被刪、換機），只在相簿權限為「完整存取」時於載入清單時清掉。
+  查不到的隱藏相簿一律當成沒有項目，不會再退回「整個相簿庫」。
+- 紀錄（`Documents/sync-log.jsonl`）：不再每個跳過的檔案寫一筆，每輪只寫上傳／失敗／警告，加一筆摘要。
+  清理時機：App 啟動（背景執行緒）、每輪同步結束、進入背景、寫入時發現檔案超過 1 MB。保留最近 30 天且最多 2000 筆，原子改寫。
+  紀錄頁只載入最近 500 筆。
+- Keychain 帳號是 `帳號@主機`。密碼欄每次內容改變就寫入 Keychain（原地更新，不先刪再寫）；帳號或主機一變，也立刻刪掉舊項目、把目前密碼存到新項目。
+  所以強制結束 App 不會掉密碼。Keychain 讀寫失敗（例如沒有簽署的建置缺 entitlement，`errSecMissingEntitlement` -34018）會在密碼欄下方顯示狀態碼，不會無聲失敗。
+- 計畫書 M3 寫「新裝置第一次同步可自動接續」：只在檔名不含 `%ID` 時成立（`%ID` 隨裝置不同），也不依賴舊的已同步集合。
+- SMB3 加密、背景任務、iCloud 原檔需實機驗證，單元測試用假的 `SMBClient` 驗證邏輯。
+
+## 指令
+
+```bash
+swift test                      # SyncCore 單元測試（macOS）
+xcodebuild -project PhotoSync.xcodeproj -scheme PhotoSync \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro' build
+```
+
+不要加 `CODE_SIGNING_ALLOWED=NO`：沒簽署的建置沒有 Keychain entitlement，密碼存不進去（`-34018`），重開 App 就空了。
+
+## 產生 IPA（給別的工具簽署安裝）
+
+```bash
+scripts/build-ipa.sh            # 輸出 build/ipa/PhotoSync.ipa
+```
+
+產生的是**未簽署**的 Release、arm64 IPA，最低 iOS 18.0，bundle id `com.konnokai.PhotoSync`。
+拿去 Sideloadly、AltStore 之類的工具重新簽署即可。簽署工具要負責 Keychain 所需的 entitlement；
+沒簽署或簽署時缺 entitlement，密碼會存不進去，設定頁密碼欄下會出現 `-34018` 的紅字。
+
+## 首頁（相簿瀏覽器＋縮圖同步狀態）
+
+規格參照 `photosync-home-display-analysis.md`，只做其中兩件事：相簿清單 → 縮圖格，以及縮圖外框顏色。
+
+- 藍框＝尚未同步（淺色 `#21A7FB` 2pt／深色 `#52BBFD` 2pt）；灰框＝已同步（淺色 `#DDDEDB` 2pt／深色 40% 灰 1pt）。
+- 「已同步」＝這個項目的每個檔案都已上傳或已在遠端；有任何檔案失敗就維持藍框。
+- 已同步的 `localIdentifier` 集合（連同指紋）存在 `Documents/synced-ids.json`。重裝或指紋改變後集合是空的，第一次同步會因遠端 diff 全部跳過而重新標成已同步。
+- 同步進行中，畫面約每 0.3 秒批次更新一次（進度、縮圖框、紀錄），不會每個檔案都重繪。
+- 刻意不做：選取勾勾／覆蓋層、手動標記、影片／連拍／RAW 標示條、收藏 ♥、列表資訊模式、moment 分組。
+- App 啟動直接進「全部相簿」縮圖格；右上角紅色圓形按鈕開始／停止同步；返回才是相簿清單。
+- 底部列顯示「N 個檔案，已同步 X 個，Y 個尚未同步」，同步中加進度條。
+- 相簿清單每列左邊有眼睛：點一下切換「顯示並同步」／「隱藏並停止同步」（隱藏的列變暗，仍可點進去看）。
+  「最近項目」（整個相簿庫）永遠顯示，不能隱藏。設定頁的單選相簿已移除。
+- 隱藏相簿裡的照片，會從「全部相簿」、最近項目、其他相簿的縮圖格拿掉，同步也跳過；點進該隱藏相簿本身仍看得到。
+  底部列會寫「N 張照片因隱藏相簿而被隱藏」。
+- 系統「已隱藏」相簿裡的照片（`isHidden`）本來就不會出現在縮圖格，也不會被同步；底部列會寫「N 張照片已被系統隱藏」。
+
+## 對真實 SMB 的整合測試
+
+`Tests/SMBIntegrationTests` 對真的 SMB 伺服器跑；沒設環境變數會自動跳過。
+
+```bash
+PPS_SMB_HOST=127.0.0.1 PPS_SMB_PORT=1445 PPS_SMB_SHARE=photos \
+PPS_SMB_USER=<帳號> PPS_SMB_PASS=<密碼> swift test --filter SMBIntegrationTests
+```
+
+本機測試伺服器用 Homebrew 的 Samba（`brew install samba`，執行檔叫 `samba-dot-org-smbd`），不需要 root：
+
+- 綁 `127.0.0.1:1445`，帳號就是目前登入的使用者（非 root 的 smbd 只能對應自己）。
+- unix socket 路徑長度有上限，`lock/private/state/cache` 要放在短路徑（例如 `/tmp/pps`）。
+- macOS 上要關掉 NT ACL，並指定 `create mask`／`directory mask`，否則新建資料夾權限會變成 `000`，之後所有操作都 `ACCESS_DENIED`：
+  `nt acl support = no`、`store dos attributes = no`、`ea support = no`、`directory mask = 0755`、`force directory mode = 0755`。
+- libsmb2 對「帳密錯、共享不存在、埠沒開」都只回 `EPERM`，所以 `AMSMBClient.connect` 失敗後會自己再探測：TCP 通不通 → 能不能登入 → 共享在不在（並列出伺服器上的共享名稱）。
