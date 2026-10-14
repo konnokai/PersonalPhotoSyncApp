@@ -37,6 +37,7 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
     public struct Options: Sendable {
         /// 這些相簿裡的項目一律不同步。
         public var excludedAlbumIDs: Set<String>
+        public var syncFromDate: Date?
         public var transcodeVideoToH264 = false
         public var includeLivePhotoVideo = false
         /// 檔名或子目錄範本用到日期時才需要拍攝時區；不需要就不去讀檔案。
@@ -45,11 +46,12 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
         public var needsAlbumName = false
         public var offsetStore: CaptureOffsetStore?
 
-        public init(excludedAlbumIDs: Set<String> = [],
+        public init(excludedAlbumIDs: Set<String> = [], syncFromDate: Date? = nil,
                     transcodeVideoToH264: Bool = false, includeLivePhotoVideo: Bool = false,
                     needsCaptureOffset: Bool = false, needsAlbumName: Bool = false,
                     offsetStore: CaptureOffsetStore? = nil) {
             self.excludedAlbumIDs = excludedAlbumIDs
+            self.syncFromDate = syncFromDate
             self.transcodeVideoToH264 = transcodeVideoToH264
             self.includeLivePhotoVideo = includeLivePhotoVideo
             self.needsCaptureOffset = needsCaptureOffset
@@ -111,9 +113,10 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
     /// 隱藏相簿裡的項目要從其他地方（最近項目、其他相簿、同步）一起拿掉。
     /// 回傳新的在前面？否：沿用拍攝時間由舊到新，顯示端自己反轉。
     /// `albumHiddenCount`：因隱藏相簿而拿掉的張數；`systemHiddenCount`：系統「已隱藏」的張數（本來就不顯示、不同步）。
-    public static func visibleAssets(albumID: String?, excludingAlbumIDs: Set<String>,
+    /// `beforeStartCount`：拍攝時間早於 `since` 而拿掉的張數（先判斷隱藏相簿，兩邊不重複計）。
+    public static func visibleAssets(albumID: String?, excludingAlbumIDs: Set<String>, since: Date? = nil,
                                      progress: ((Double) -> Void)? = nil)
-        -> (assets: [PHAsset], albumHiddenCount: Int, systemHiddenCount: Int) {
+        -> (assets: [PHAsset], albumHiddenCount: Int, systemHiddenCount: Int, beforeStartCount: Int) {
         let all = fetchAssets(albumID: albumID).assets
         let hiddenFetches = excludingAlbumIDs.filter { $0 != albumID }.map { fetchAssets(albumID: $0).assets }
         let total = Double(max(1, all.count + hiddenFetches.reduce(0) { $0 + $1.count }))
@@ -132,14 +135,21 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
             }
         }
         var visible: [PHAsset] = []
+        var beforeStart = 0
         all.enumerateObjects { asset, _, stop in
-            if !excluded.contains(asset.localIdentifier) { visible.append(asset) }
+            if excluded.contains(asset.localIdentifier) {
+                // 已算進隱藏張數，不重複算成「早於起始日期」。
+            } else if SyncStartDate.includes(creationDate: asset.creationDate, since: since) {
+                visible.append(asset)
+            } else {
+                beforeStart += 1
+            }
             step()
             if Task.isCancelled { stop.pointee = true }
         }
-        if Task.isCancelled { return ([], 0, 0) }
+        if Task.isCancelled { return ([], 0, 0, 0) }
         let withHidden = fetchAssets(albumID: albumID, includeHidden: true).assets.count
-        return (visible, all.count - visible.count, withHidden - all.count)
+        return (visible, all.count - visible.count - beforeStart, withHidden - all.count, beforeStart)
     }
 
     // MARK: - PhotoSource
@@ -166,7 +176,8 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
     }
 
     public func assets() async throws -> [SourceAsset] {
-        let visible = Self.visibleAssets(albumID: nil, excludingAlbumIDs: options.excludedAlbumIDs).assets
+        let visible = Self.visibleAssets(albumID: nil, excludingAlbumIDs: options.excludedAlbumIDs,
+                                         since: options.syncFromDate).assets
         try Task.checkCancellation()
         let albumNames = options.needsAlbumName ? try albumAssignment() : [:]
         var offsets = options.needsCaptureOffset ? (options.offsetStore?.load() ?? [:]) : [:]

@@ -67,6 +67,7 @@ struct AlbumGridView: View {
     @State private var assetIDs: [String] = []
     @State private var albumHiddenCount = 0
     @State private var systemHiddenCount = 0
+    @State private var beforeStartCount = 0
     @State private var isLoading = true
     @State private var loadProgress = 0.0
 
@@ -93,16 +94,18 @@ struct AlbumGridView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { SyncButton() } }
         .safeAreaInset(edge: .bottom) { StatusBar(ids: assetIDs, albumHiddenCount: albumHiddenCount,
-                                             systemHiddenCount: systemHiddenCount) }
-        .task {
+                                             systemHiddenCount: systemHiddenCount,
+                                             beforeStartCount: beforeStartCount) }
+        .task(id: model.config.syncFromDate) {   // 設定頁改了起始日期，縮圖格要跟著重載
             isLoading = true
             loadProgress = 0
             let albumID = album.id.isEmpty ? nil : album.id
             let hidden = model.config.hiddenAlbumIDs
+            let since = model.config.syncFromDate
             // 大相簿要讀很多項目，放到背景做，畫面才不會卡住。
             // detached 不會繼承取消，要自己轉接，離開頁面時整庫列舉才會停。
             let work = Task.detached(priority: .userInitiated) {
-                PhotoKitSource.visibleAssets(albumID: albumID, excludingAlbumIDs: hidden) { p in
+                PhotoKitSource.visibleAssets(albumID: albumID, excludingAlbumIDs: hidden, since: since) { p in
                     Task { @MainActor in loadProgress = p }
                 }
             }
@@ -112,6 +115,7 @@ struct AlbumGridView: View {
             assetIDs = assets.map(\.localIdentifier)
             albumHiddenCount = result.albumHiddenCount
             systemHiddenCount = result.systemHiddenCount
+            beforeStartCount = result.beforeStartCount
             isLoading = false
         }
     }
@@ -122,6 +126,7 @@ struct StatusBar: View {
     let ids: [String]
     let albumHiddenCount: Int
     let systemHiddenCount: Int
+    let beforeStartCount: Int
 
     var body: some View {
         VStack(spacing: 4) {
@@ -138,6 +143,7 @@ struct StatusBar: View {
             Text("\(ids.count) 個檔案，已同步 \(synced) 個，\(ids.count - synced) 個尚未同步")
                 .font(.footnote)
             if systemHiddenCount > 0 { Text("\(systemHiddenCount) 張照片已被系統隱藏（不顯示、不同步）").font(.footnote) }
+            if beforeStartCount > 0 { Text("\(beforeStartCount) 張照片早於起始日期（不顯示、不同步）").font(.footnote) }
             if albumHiddenCount > 0 { Text("\(albumHiddenCount) 張照片因隱藏相簿而被隱藏").font(.footnote) }
             if let s = model.summary {
                 if s.failed > 0 { Text("上次同步失敗 \(s.failed) 個，詳見紀錄").font(.caption).foregroundStyle(.red) }
@@ -349,6 +355,21 @@ struct SettingsView: View {
                         Text("日期與時間用拍攝時間。「/」在子目錄範本裡代表分層。範例：%YR/%YR-%mR → 2026/2026-03")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                }
+                Section {
+                    Toggle("只同步此日期之後的照片", isOn: Binding(
+                        get: { model.config.syncFromDate != nil },
+                        set: { model.config.syncFromDate = $0 ? Calendar.current.startOfDay(for: Date()) : nil }))
+                    if let date = model.config.syncFromDate {
+                        DatePicker("起始日期", selection: Binding(
+                            get: { date },
+                            set: { model.config.syncFromDate = Calendar.current.startOfDay(for: $0) }),
+                                   displayedComponents: .date)
+                    }
+                } header: {
+                    Text("同步範圍")
+                } footer: {
+                    Text("拍攝時間早於這天的照片不顯示也不同步。拍攝日期很舊、之後才存進相簿的照片也會被略過。")
                 }
                 Section("上傳") {
                     Picker("同名衝突", selection: $model.config.conflict) {

@@ -36,6 +36,9 @@ public struct SyncConfig: Codable, Equatable, Sendable {
     public var remoteRoot = ""
     /// 被隱藏的相簿：首頁清單變暗，同步時也跳過。
     public var hiddenAlbumIDs: Set<String> = []
+    /// 一定要 Optional：合成的 `Decodable` 只對 Optional 欄位容許缺 key，舊設定檔才解得開。
+    /// 解不開時 `AppModel` 會退回預設值，連線資料就掉了。
+    public var syncFromDate: Date?
     public var nameMode: NameMode = .original
     public var nameTemplate = "%OP.%EP"
     public var subdirectoryTemplate = ""
@@ -56,7 +59,7 @@ public struct SyncConfig: Codable, Equatable, Sendable {
 
     public init() {}
 
-    /// 「已同步」集合只在這些欄位都沒變時才有效。副檔名大小寫、隱藏相簿、衝突策略不影響上傳到哪、叫什麼，不列入。
+    /// 「已同步」集合只在這些欄位都沒變時才有效。副檔名大小寫、隱藏相簿、起始日期、衝突策略不影響上傳到哪、叫什麼，不列入。
     public var destinationFingerprint: String {
         let root = remoteRoot.split(separator: "/").joined(separator: "/")
         return [host.lowercased(), share.lowercased(), root, effectiveNameTemplate, subdirectoryTemplate,
