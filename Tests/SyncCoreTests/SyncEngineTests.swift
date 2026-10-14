@@ -550,7 +550,7 @@ final class CaptureOffsetStoreTests: XCTestCase {
 
         for change in [{ (x: inout SyncConfig) in x.share = "q" }, { $0.remoteRoot = "Other" },
                        { $0.nameMode = .timestamp }, { $0.subdirectoryTemplate = "%YR" },
-                       { $0.convertHEICToJPEG = true }, { $0.transcodeVideoToH264 = true },
+                       { $0.transcodeVideoToH264 = true },
                        { $0.includeLivePhotoVideo = true }, { $0.fallbackTimeZoneID = "Asia/Tokyo" }] {
             var d = c; change(&d)
             XCTAssertNotEqual(c.destinationFingerprint, d.destinationFingerprint)

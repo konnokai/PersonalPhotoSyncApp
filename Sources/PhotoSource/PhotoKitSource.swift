@@ -1,6 +1,5 @@
 import AVFoundation
 import Foundation
-import ImageIO
 import Photos
 import SyncCore
 import UniformTypeIdentifiers
@@ -38,7 +37,6 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
     public struct Options: Sendable {
         /// 這些相簿裡的項目一律不同步。
         public var excludedAlbumIDs: Set<String>
-        public var convertHEICToJPEG = false
         public var transcodeVideoToH264 = false
         public var includeLivePhotoVideo = false
         /// 檔名或子目錄範本用到日期時才需要拍攝時區；不需要就不去讀檔案。
@@ -47,12 +45,11 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
         public var needsAlbumName = false
         public var offsetStore: CaptureOffsetStore?
 
-        public init(excludedAlbumIDs: Set<String> = [], convertHEICToJPEG: Bool = false,
+        public init(excludedAlbumIDs: Set<String> = [],
                     transcodeVideoToH264: Bool = false, includeLivePhotoVideo: Bool = false,
                     needsCaptureOffset: Bool = false, needsAlbumName: Bool = false,
                     offsetStore: CaptureOffsetStore? = nil) {
             self.excludedAlbumIDs = excludedAlbumIDs
-            self.convertHEICToJPEG = convertHEICToJPEG
             self.transcodeVideoToH264 = transcodeVideoToH264
             self.includeLivePhotoVideo = includeLivePhotoVideo
             self.needsCaptureOffset = needsCaptureOffset
@@ -212,11 +209,6 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
         switch transform(for: resource) {
         case .none:
             try await PHAssetResourceManager.default().writeData(for: resource, toFile: url, options: writeOptions)
-        case .jpeg:
-            let source = url.appendingPathExtension("src")
-            defer { try? FileManager.default.removeItem(at: source) }
-            try await PHAssetResourceManager.default().writeData(for: resource, toFile: source, options: writeOptions)
-            try Self.convertToJPEG(from: source, to: url)
         case .h264:
             // AVURLAsset 靠副檔名判斷容器，中繼檔要保留原副檔名。
             let source = url.deletingLastPathComponent()
@@ -268,14 +260,12 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
 
     // MARK: - 資源挑選
 
-    private enum Transform { case none, jpeg, h264 }
-
     private func files(for asset: PHAsset) -> [SourceFile] {
         let resources = PHAssetResource.assetResources(for: asset)
-        var picked: [PHAssetResource] = []
         let primaryTypes: [PHAssetResourceType] = asset.mediaType == .video ? [.video] : [.photo]
         // 找不到主資源時只退到另一種「圖／影片本體」，不能隨便抓第一個（可能是調整資料 plist）。
         let fallbackTypes: [PHAssetResourceType] = [.alternatePhoto, .fullSizePhoto, .fullSizeVideo]
+        var picked: [PHAssetResource] = []
         if let main = resources.first(where: { primaryTypes.contains($0.type) })
             ?? resources.first(where: { fallbackTypes.contains($0.type) }) {
             picked.append(main)
@@ -285,21 +275,21 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
             picked.append(paired)
         }
         return picked.map { r in
-            let transform = transform(for: r)
-            let ext = (r.originalFilename as NSString).pathExtension
+            let transcoded = transform(for: r) == .h264
             return SourceFile(
                 key: Self.key(for: r), originalName: r.originalFilename,
-                outputExtension: transform == .jpeg ? "jpg" : transform == .h264 ? "mp4" : ext,
-                size: transform == .none ? Self.fileSize(of: r) : nil)
+                outputExtension: transcoded ? "mp4" : (r.originalFilename as NSString).pathExtension,
+                size: transcoded ? nil : Self.fileSize(of: r))
         }
     }
 
+    private enum Transform { case none, h264 }
+
     private func transform(for r: PHAssetResource) -> Transform {
-        guard let type = UTType(r.uniformTypeIdentifier) else { return .none }
-        if options.convertHEICToJPEG, type.conforms(to: .heic) || type.conforms(to: .heif) { return .jpeg }
         // Live Photo 的配對影片不轉檔，維持和照片一對一。
-        if options.transcodeVideoToH264, r.type == .video, type.conforms(to: .movie) { return .h264 }
-        return .none
+        guard options.transcodeVideoToH264, r.type == .video,
+              UTType(r.uniformTypeIdentifier)?.conforms(to: .movie) == true else { return .none }
+        return .h264
     }
 
     private static func key(for r: PHAssetResource) -> String { "r\(r.type.rawValue)" }
@@ -311,16 +301,6 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
     }
 
     // MARK: - 轉檔
-
-    private static func convertToJPEG(from source: URL, to url: URL) throws {
-        guard let src = CGImageSourceCreateWithURL(source as CFURL, nil),
-              let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)
-        else { throw PhotoSourceError.conversionFailed("無法開啟 HEIC") }
-        // AddImageFromSource 會連 EXIF／方向一起帶過去。
-        CGImageDestinationAddImageFromSource(
-            dest, src, 0, [kCGImageDestinationLossyCompressionQuality: 0.92] as CFDictionary)
-        guard CGImageDestinationFinalize(dest) else { throw PhotoSourceError.conversionFailed("寫出 JPEG") }
-    }
 
     /// 1080p 預設組合保證是 H.264；HighestQuality 會沿用原本的 HEVC，不算轉 H.264。
     private static func exportH264(from source: URL, to url: URL) async throws {

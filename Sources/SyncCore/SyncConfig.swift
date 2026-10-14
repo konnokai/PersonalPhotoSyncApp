@@ -46,7 +46,6 @@ public struct SyncConfig: Codable, Equatable, Sendable {
     public var requireEncryption = false
 
     // M4 選配功能，預設關閉。
-    public var convertHEICToJPEG = false
     public var transcodeVideoToH264 = false
     public var includeLivePhotoVideo = false
     public var backgroundSync = false
@@ -61,7 +60,7 @@ public struct SyncConfig: Codable, Equatable, Sendable {
     public var destinationFingerprint: String {
         let root = remoteRoot.split(separator: "/").joined(separator: "/")
         return [host.lowercased(), share.lowercased(), root, effectiveNameTemplate, subdirectoryTemplate,
-                String(convertHEICToJPEG), String(transcodeVideoToH264), String(includeLivePhotoVideo),
+                String(transcodeVideoToH264), String(includeLivePhotoVideo),
                 fallbackTimeZoneID].joined(separator: "\n")
     }
 

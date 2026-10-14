@@ -7,7 +7,7 @@
 - 用 SMB（含 SMB3 加密）連到 NAS，遠端根目錄用資料夾瀏覽器選。
 - 首頁是相簿瀏覽器：縮圖外框顏色表示同步狀態（藍框＝尚未同步，灰框＝已同步）。
 - 檔名和子目錄都能用範本，例如拍攝日期、原檔名、相簿名稱；日期用「拍攝當下的當地時間」。
-- 可選 HEIC 轉 JPEG、影片轉 H.264、Live Photo、寫入拍攝時間到遠端檔案。
+- 可選影片轉 H.264、Live Photo 一併上傳 MOV、寫入拍攝時間到遠端檔案。
 - 同名檔自動加 `_1`、`_2` 後綴，也可選擇跳過或覆蓋；上傳先寫 `.part`，完成才改成正式檔名，中斷的半截檔不會被當成成品。
 - 相簿可個別隱藏並停止同步。
 - 同步紀錄頁，保留最近 30 天。
@@ -46,7 +46,7 @@ scripts/build-ipa.sh    # 輸出 build/ipa/PhotoSync.ipa
 | `SyncCore` | 範本引擎、衝突解析、同步引擎、log。只依賴 Foundation，靠 `SMBClient`／`PhotoSource` 兩個協定隔離外部 |
 | `SMBAdapter` | 用 [AMSMB2](https://github.com/amosavian/AMSMB2) 實作 `SMBClient` |
 | `PhotoSource` | 用 PhotoKit／ImageIO／AVFoundation 實作 `PhotoSource` |
-| `App/` | SwiftUI 殼：設定、進度、log、Keychain、背景任務 |
+| `App/` | SwiftUI 殼：設定、進度、log、Keychain、背景任務、捷徑動作 |
 
 ## 開發
 
@@ -64,7 +64,7 @@ PPS_SMB_HOST=127.0.0.1 PPS_SMB_PORT=1445 PPS_SMB_SHARE=photos \
 PPS_SMB_USER=<帳號> PPS_SMB_PASS=<密碼> swift test --filter SMBIntegrationTests
 ```
 
-SMB3 加密、背景任務、iCloud 原檔要實機驗證；單元測試用假的 `SMBClient` 驗證邏輯。
+SMB3 加密、背景任務、捷徑自動化、iCloud 原檔要實機驗證；單元測試用假的 `SMBClient` 驗證邏輯。
 
 ## 文件
 

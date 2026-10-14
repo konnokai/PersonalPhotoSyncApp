@@ -174,7 +174,7 @@ final class AppModel: ObservableObject {
         try? FileManager.default.removeItem(at: temp)   // 上次被強制結束留下的暫存檔
 
         let source = PhotoKitSource(options: .init(
-            excludedAlbumIDs: config.hiddenAlbumIDs, convertHEICToJPEG: config.convertHEICToJPEG,
+            excludedAlbumIDs: config.hiddenAlbumIDs,
             transcodeVideoToH264: config.transcodeVideoToH264,
             includeLivePhotoVideo: config.includeLivePhotoVideo,
             needsCaptureOffset: config.usesDateTokens, needsAlbumName: config.usesAlbumToken,

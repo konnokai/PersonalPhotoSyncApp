@@ -360,7 +360,6 @@ struct SettingsView: View {
                     Toggle("寫入拍攝時間到 NAS 檔案", isOn: $model.config.writeTimestamps)
                 }
                 Section("進階（預設關閉）") {
-                    Toggle("HEIC 轉 JPEG", isOn: $model.config.convertHEICToJPEG)
                     Toggle("影片轉 H.264（最大 1080p）", isOn: $model.config.transcodeVideoToH264)
                     Toggle("Live Photo 一併上傳 MOV", isOn: $model.config.includeLivePhotoVideo)
                     Toggle("背景自動同步", isOn: $model.config.backgroundSync)
