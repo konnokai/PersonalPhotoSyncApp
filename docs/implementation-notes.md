@@ -6,6 +6,12 @@
 
 - 本機檔案大小：公開 PhotoKit 沒有 size，使用 `PHAssetResource` 的 `fileSize` KVC（未公開，自用 App 可接受）。
   取不到、或有轉檔（影片轉碼）時 size 視為未知。
+- 編輯過的項目只傳編輯後的版本（`ResourceSelection`，`Sources/PhotoSource/ResourceSelection.swift`，純邏輯，有單元測試）：
+  PhotoKit 的 `.photo`／`.video` 是未編輯原檔，`.fullSizePhoto`／`.fullSizeVideo`（Live Photo 的 MOV 是 `.fullSizePairedVideo`）才是編輯後的。
+  有編輯後資源就用它，沒有才用原檔。編輯後資源叫 `FullSizeRender.xxx`，所以檔名主體沿用原檔，副檔名用編輯後的
+  （大小寫相同時照原檔，例如 `IMG_7547.HEIC`）。編輯後的 JPEG 資源是 `.jpeg`，一律寫成 `.jpg`，才對得上舊 App 留在 NAS 的 `.JPG`。影片轉 H.264 對編輯後的影片同樣有效，配對影片仍不轉檔。
+  已知情況：照片同步之後才編輯，遠端比對找不到相同的檔案，會多傳一份編輯後的版本（`_1`），舊的那份留在 NAS；
+  還原編輯則會讓原檔以 `_N` 再傳一次。未驗證：編輯後的匯出內容是否和舊同步 App 傳的逐位元組相同，不同的話既有的編輯檔會被當成別人的而多傳。
 - 不做 HEIC→JPEG 轉檔（計畫書 §42、§89 的開關已移除）：HEIC、JPEG 本來就照原檔上傳，不需要另外轉。
   想要兩種格式的使用者，相簿裡本來就有的 JPEG 會和 HEIC 一樣被傳。
 - 「Live Photo 一併上傳 MOV」開啟時，一個項目有兩個檔案（照片＋配對影片），各算一個 `Item`，全部完成這個項目才算已同步。

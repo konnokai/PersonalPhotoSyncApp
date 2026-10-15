@@ -273,23 +273,18 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
 
     private func files(for asset: PHAsset) -> [SourceFile] {
         let resources = PHAssetResource.assetResources(for: asset)
-        let primaryTypes: [PHAssetResourceType] = asset.mediaType == .video ? [.video] : [.photo]
-        // 找不到主資源時只退到另一種「圖／影片本體」，不能隨便抓第一個（可能是調整資料 plist）。
-        let fallbackTypes: [PHAssetResourceType] = [.alternatePhoto, .fullSizePhoto, .fullSizeVideo]
-        var picked: [PHAssetResource] = []
-        if let main = resources.first(where: { primaryTypes.contains($0.type) })
-            ?? resources.first(where: { fallbackTypes.contains($0.type) }) {
-            picked.append(main)
-        }
-        if options.includeLivePhotoVideo, asset.mediaSubtypes.contains(.photoLive),
-           let paired = resources.first(where: { $0.type == .pairedVideo }) {
-            picked.append(paired)
-        }
-        return picked.map { r in
+        func resource(_ type: PHAssetResourceType) -> PHAssetResource? { resources.first { $0.type == type } }
+        let picked = ResourceSelection.pick(
+            available: Set(resources.map(\.type)), isVideoAsset: asset.mediaType == .video,
+            wantsLivePhotoVideo: options.includeLivePhotoVideo && asset.mediaSubtypes.contains(.photoLive))
+        return [picked.main, picked.pairedVideo].compactMap { $0 }.compactMap { pick in
+            guard let r = resource(pick.type) else { return nil }
+            let name = ResourceSelection.outputName(
+                original: pick.nameFrom.flatMap(resource)?.originalFilename, edited: r.originalFilename)
             let transcoded = transform(for: r) == .h264
             return SourceFile(
-                key: Self.key(for: r), originalName: r.originalFilename,
-                outputExtension: transcoded ? "mp4" : (r.originalFilename as NSString).pathExtension,
+                key: Self.key(for: r), originalName: name,
+                outputExtension: transcoded ? "mp4" : (name as NSString).pathExtension,
                 size: transcoded ? nil : Self.fileSize(of: r))
         }
     }
@@ -297,10 +292,8 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
     private enum Transform { case none, h264 }
 
     private func transform(for r: PHAssetResource) -> Transform {
-        // Live Photo 的配對影片不轉檔，維持和照片一對一。
-        guard options.transcodeVideoToH264, r.type == .video,
-              UTType(r.uniformTypeIdentifier)?.conforms(to: .movie) == true else { return .none }
-        return .h264
+        ResourceSelection.shouldTranscode(type: r.type, uti: r.uniformTypeIdentifier, option: options.transcodeVideoToH264)
+            ? .h264 : .none
     }
 
     private static func key(for r: PHAssetResource) -> String { "r\(r.type.rawValue)" }
