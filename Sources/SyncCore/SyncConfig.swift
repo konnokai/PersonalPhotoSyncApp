@@ -48,9 +48,11 @@ public struct SyncConfig: Codable, Equatable, Sendable {
     public var writeTimestamps = true
     public var requireEncryption = false
 
-    // M4 選配功能，預設關閉。
+    // M4 選配功能，預設關閉（JPEG 副本除外，預設開啟）。
     public var transcodeVideoToH264 = false
     public var includeLivePhotoVideo = false
+    /// Optional 的理由同 `syncFromDate`：舊設定檔沒有這個 key。nil 視為開啟，讀寫都走 `includeJPEGCopy`。
+    public var includeJPEGCopyStored: Bool?
     public var backgroundSync = false
 
     /// 讀不到拍攝時區的項目用這個。第一次啟動時記下當時的裝置時區，之後不再跟著裝置變，
@@ -59,11 +61,17 @@ public struct SyncConfig: Codable, Equatable, Sendable {
 
     public init() {}
 
+    /// HEIC／HEIF 另存一份 JPEG，給不支援 HEIC 的網站和軟體用。預設開啟。
+    public var includeJPEGCopy: Bool {
+        get { includeJPEGCopyStored ?? true }
+        set { includeJPEGCopyStored = newValue }
+    }
+
     /// 「已同步」集合只在這些欄位都沒變時才有效。副檔名大小寫、隱藏相簿、起始日期、衝突策略不影響上傳到哪、叫什麼，不列入。
     public var destinationFingerprint: String {
         let root = remoteRoot.split(separator: "/").joined(separator: "/")
         return [host.lowercased(), share.lowercased(), root, effectiveNameTemplate, subdirectoryTemplate,
-                String(transcodeVideoToH264), String(includeLivePhotoVideo),
+                String(transcodeVideoToH264), String(includeLivePhotoVideo), String(includeJPEGCopy),
                 fallbackTimeZoneID].joined(separator: "\n")
     }
 

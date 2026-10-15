@@ -93,6 +93,20 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(s.skipped, 1)
     }
 
+    /// HEIC 主檔（大小已知）加 JPEG 副本（大小未知）：重跑時兩個都該略過，不能疊出 `_1`。
+    func testResyncSkipsMainFileAndUnknownSizeCopy() async {
+        let smb = FakeSMB()
+        var asset = makeAsset("a", "IMG_1.HEIC")
+        asset.files.append(SourceFile(key: "main+jpg", originalName: "IMG_1.HEIC", outputExtension: "JPG", size: nil))
+        let source = FakeSource([asset])
+        let first = await run(engine(smb, source))
+        XCTAssertEqual(first.uploaded, 2)
+        let second = await run(engine(smb, source))
+        XCTAssertEqual(second.skipped, 2)
+        XCTAssertEqual(second.uploaded, 0)
+        XCTAssertNil(smb.files["Photos/IMG_1_1.JPG"])
+    }
+
     func testFailureCleansPartAndRetries() async {
         let smb = FakeSMB()
         smb.failUploads = 2
@@ -551,7 +565,8 @@ final class CaptureOffsetStoreTests: XCTestCase {
         for change in [{ (x: inout SyncConfig) in x.share = "q" }, { $0.remoteRoot = "Other" },
                        { $0.nameMode = .timestamp }, { $0.subdirectoryTemplate = "%YR" },
                        { $0.transcodeVideoToH264 = true },
-                       { $0.includeLivePhotoVideo = true }, { $0.fallbackTimeZoneID = "Asia/Tokyo" }] {
+                       { $0.includeLivePhotoVideo = true }, { $0.fallbackTimeZoneID = "Asia/Tokyo" },
+                       { $0.includeJPEGCopy = false }] {
             var d = c; change(&d)
             XCTAssertNotEqual(c.destinationFingerprint, d.destinationFingerprint)
         }

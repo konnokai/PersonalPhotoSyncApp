@@ -67,6 +67,26 @@ final class ResourceSelectionTests: XCTestCase {
         XCTAssertEqual(ResourceSelection.outputName(original: nil, edited: "FullSizeRender.jpg"), "FullSizeRender.jpg")
     }
 
+    // MARK: - JPEG 副本
+
+    func testJPEGCopyOnlyForHEICAndHEIFMainFiles() {
+        XCTAssertTrue(ResourceSelection.needsJPEGCopy(type: .photo, uti: "public.heic", option: true))
+        XCTAssertTrue(ResourceSelection.needsJPEGCopy(type: .fullSizePhoto, uti: "public.heif", option: true))
+        XCTAssertFalse(ResourceSelection.needsJPEGCopy(type: .fullSizePhoto, uti: "public.jpeg", option: true))
+        XCTAssertFalse(ResourceSelection.needsJPEGCopy(type: .photo, uti: "public.png", option: true))
+        XCTAssertFalse(ResourceSelection.needsJPEGCopy(type: .photo, uti: "public.heic", option: false))
+    }
+
+    func testJPEGCopyNeverForVideosOrPairedVideo() {
+        XCTAssertFalse(ResourceSelection.needsJPEGCopy(type: .video, uti: "com.apple.quicktime-movie", option: true))
+        XCTAssertFalse(ResourceSelection.needsJPEGCopy(type: .pairedVideo, uti: "com.apple.quicktime-movie", option: true))
+    }
+
+    func testJPEGCopyExtensionFollowsCaseOfMainExtension() {
+        XCTAssertEqual(ResourceSelection.jpegCopyExtension(mainName: "IMG_1.HEIC"), "JPG")
+        XCTAssertEqual(ResourceSelection.jpegCopyExtension(mainName: "IMG_1.heic"), "jpg")
+    }
+
     // MARK: - 轉碼
 
     func testTranscodeAppliesToMainVideoIncludingEditedButNotPairedVideo() {

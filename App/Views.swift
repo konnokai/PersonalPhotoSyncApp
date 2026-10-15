@@ -379,6 +379,7 @@ struct SettingsView: View {
                     }
                     Stepper("每檔重試 \(model.config.retries) 次", value: $model.config.retries, in: 0...5)
                     Toggle("寫入拍攝時間到 NAS 檔案", isOn: $model.config.writeTimestamps)
+                    Toggle("HEIC 另存一份 JPEG", isOn: $model.config.includeJPEGCopy)
                 }
                 Section("進階（預設關閉）") {
                     Toggle("影片轉 H.264（最大 1080p）", isOn: $model.config.transcodeVideoToH264)

@@ -177,6 +177,7 @@ final class AppModel: ObservableObject {
             excludedAlbumIDs: config.hiddenAlbumIDs, syncFromDate: config.syncFromDate,
             transcodeVideoToH264: config.transcodeVideoToH264,
             includeLivePhotoVideo: config.includeLivePhotoVideo,
+            includeJPEGCopy: config.includeJPEGCopy,
             needsCaptureOffset: config.usesDateTokens, needsAlbumName: config.usesAlbumToken,
             offsetStore: offsetStore))
         var engine = SyncEngine(smb: client, source: source, config: config, tempDirectory: temp)

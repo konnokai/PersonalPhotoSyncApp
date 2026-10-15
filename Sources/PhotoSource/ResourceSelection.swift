@@ -50,6 +50,19 @@ enum ResourceSelection {
         return ext.isEmpty ? stem : stem + "." + ext
     }
 
+    /// 只有照片本體的 HEIC／HEIF 才另存 JPEG；已經是 JPEG 的編輯版、影片、配對影片都不需要。
+    static func needsJPEGCopy(type: PHAssetResourceType, uti: String, option: Bool) -> Bool {
+        guard option, type == .photo || type == .fullSizePhoto || type == .alternatePhoto,
+              let utType = UTType(uti) else { return false }
+        return utType.conforms(to: .heic) || utType.conforms(to: .heif)
+    }
+
+    /// 副檔名大小寫跟著主檔，NAS 上 HEIC／JPG 成對時才會一致。
+    static func jpegCopyExtension(mainName: String) -> String {
+        let ext = (mainName as NSString).pathExtension
+        return ext == ext.uppercased() ? "JPG" : "jpg"
+    }
+
     /// Live Photo 的配對影片不轉檔，維持和照片一對一。
     static func shouldTranscode(type: PHAssetResourceType, uti: String, option: Bool) -> Bool {
         guard option, type == .video || type == .fullSizeVideo else { return false }

@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import ImageIO
 import Photos
 import SyncCore
 import UniformTypeIdentifiers
@@ -40,6 +41,7 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
         public var syncFromDate: Date?
         public var transcodeVideoToH264 = false
         public var includeLivePhotoVideo = false
+        public var includeJPEGCopy = false
         /// 檔名或子目錄範本用到日期時才需要拍攝時區；不需要就不去讀檔案。
         public var needsCaptureOffset = false
         /// 範本用到 %AP 才需要列舉相簿。
@@ -47,13 +49,14 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
         public var offsetStore: CaptureOffsetStore?
 
         public init(excludedAlbumIDs: Set<String> = [], syncFromDate: Date? = nil,
-                    transcodeVideoToH264: Bool = false, includeLivePhotoVideo: Bool = false,
+                    transcodeVideoToH264: Bool = false, includeLivePhotoVideo: Bool = false, includeJPEGCopy: Bool = false,
                     needsCaptureOffset: Bool = false, needsAlbumName: Bool = false,
                     offsetStore: CaptureOffsetStore? = nil) {
             self.excludedAlbumIDs = excludedAlbumIDs
             self.syncFromDate = syncFromDate
             self.transcodeVideoToH264 = transcodeVideoToH264
             self.includeLivePhotoVideo = includeLivePhotoVideo
+            self.includeJPEGCopy = includeJPEGCopy
             self.needsCaptureOffset = needsCaptureOffset
             self.needsAlbumName = needsAlbumName
             self.offsetStore = offsetStore
@@ -210,13 +213,25 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
     public func export(assetID: String, fileKey: String, to url: URL) async throws {
         guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetID], options: nil).firstObject
         else { throw PhotoSourceError.assetNotFound(assetID) }
+        let isJPEGCopy = fileKey.hasSuffix(Self.jpegCopySuffix)
+        let baseKey = isJPEGCopy ? String(fileKey.dropLast(Self.jpegCopySuffix.count)) : fileKey
         guard let resource = PHAssetResource.assetResources(for: asset)
-            .first(where: { Self.key(for: $0) == fileKey })
+            .first(where: { Self.key(for: $0) == baseKey })
         else { throw PhotoSourceError.resourceNotFound(fileKey) }
 
         let writeOptions = PHAssetResourceRequestOptions()
         writeOptions.isNetworkAccessAllowed = true   // iCloud-only 原檔需要前景才取得到
 
+        if isJPEGCopy {
+            let source = url.appendingPathExtension("src")
+            defer { try? FileManager.default.removeItem(at: source) }
+            try await PHAssetResourceManager.default().writeData(for: resource, toFile: source, options: writeOptions)
+            // 轉檔是同步的，前後各檢查一次，取消才不會等到整張轉完。
+            try Task.checkCancellation()
+            try Self.convertToJPEG(from: source, to: url)
+            try Task.checkCancellation()
+            return
+        }
         switch transform(for: resource) {
         case .none:
             try await PHAssetResourceManager.default().writeData(for: resource, toFile: url, options: writeOptions)
@@ -277,15 +292,22 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
         let picked = ResourceSelection.pick(
             available: Set(resources.map(\.type)), isVideoAsset: asset.mediaType == .video,
             wantsLivePhotoVideo: options.includeLivePhotoVideo && asset.mediaSubtypes.contains(.photoLive))
-        return [picked.main, picked.pairedVideo].compactMap { $0 }.compactMap { pick in
-            guard let r = resource(pick.type) else { return nil }
+        return [picked.main, picked.pairedVideo].compactMap { $0 }.flatMap { pick -> [SourceFile] in
+            guard let r = resource(pick.type) else { return [] }
             let name = ResourceSelection.outputName(
                 original: pick.nameFrom.flatMap(resource)?.originalFilename, edited: r.originalFilename)
             let transcoded = transform(for: r) == .h264
-            return SourceFile(
+            var result = [SourceFile(
                 key: Self.key(for: r), originalName: name,
                 outputExtension: transcoded ? "mp4" : (name as NSString).pathExtension,
-                size: transcoded ? nil : Self.fileSize(of: r))
+                size: transcoded ? nil : Self.fileSize(of: r))]
+            if ResourceSelection.needsJPEGCopy(type: r.type, uti: r.uniformTypeIdentifier, option: options.includeJPEGCopy) {
+                // 大小要轉完才知道；名字沿用主檔，只換副檔名，範本和副檔名大小寫設定才照常運作。
+                result.append(SourceFile(
+                    key: Self.key(for: r) + Self.jpegCopySuffix, originalName: name,
+                    outputExtension: ResourceSelection.jpegCopyExtension(mainName: name), size: nil))
+            }
+            return result
         }
     }
 
@@ -297,6 +319,7 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
     }
 
     private static func key(for r: PHAssetResource) -> String { "r\(r.type.rawValue)" }
+    private static let jpegCopySuffix = "+jpg"
 
     /// 公開 PhotoKit 沒有檔案大小；`fileSize` 是未公開的 KVC key，所以先確認有這個 selector。
     private static func fileSize(of r: PHAssetResource) -> Int64? {
@@ -305,6 +328,16 @@ public final class PhotoKitSource: PhotoSource, @unchecked Sendable {
     }
 
     // MARK: - 轉檔
+
+    private static func convertToJPEG(from source: URL, to url: URL) throws {
+        guard let src = CGImageSourceCreateWithURL(source as CFURL, nil),
+              let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)
+        else { throw PhotoSourceError.conversionFailed("無法開啟 HEIC") }
+        // AddImageFromSource 會連 EXIF／方向一起帶過去。
+        CGImageDestinationAddImageFromSource(
+            dest, src, 0, [kCGImageDestinationLossyCompressionQuality: 0.92] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { throw PhotoSourceError.conversionFailed("寫出 JPEG") }
+    }
 
     /// 1080p 預設組合保證是 H.264；HighestQuality 會沿用原本的 HEVC，不算轉 H.264。
     private static func exportH264(from source: URL, to url: URL) async throws {
