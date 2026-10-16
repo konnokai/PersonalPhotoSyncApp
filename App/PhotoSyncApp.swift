@@ -17,7 +17,11 @@ struct PhotoSyncApp: App {
             .environmentObject(model)
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .background { model.didEnterBackground() }
+            switch phase {
+            case .background: model.didEnterBackground()
+            case .active: model.didBecomeActive()
+            default: break
+            }
         }
     }
 }

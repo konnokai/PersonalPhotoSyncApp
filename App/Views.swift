@@ -96,7 +96,7 @@ struct AlbumGridView: View {
         .safeAreaInset(edge: .bottom) { StatusBar(ids: assetIDs, albumHiddenCount: albumHiddenCount,
                                              systemHiddenCount: systemHiddenCount,
                                              beforeStartCount: beforeStartCount) }
-        .task(id: model.config.syncFromDate) {   // 設定頁改了起始日期，縮圖格要跟著重載
+        .task(id: ReloadKey(since: model.config.syncFromDate, generation: model.foregroundGeneration)) {
             isLoading = true
             loadProgress = 0
             let albumID = album.id.isEmpty ? nil : album.id
@@ -119,6 +119,12 @@ struct AlbumGridView: View {
             isLoading = false
         }
     }
+}
+
+/// 設定頁改了起始日期、或 App 從背景回來，縮圖格都要重載。
+private struct ReloadKey: Equatable {
+    let since: Date?
+    let generation: Int
 }
 
 struct StatusBar: View {

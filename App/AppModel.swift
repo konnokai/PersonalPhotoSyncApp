@@ -35,6 +35,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var albums: [AlbumInfo] = []
 
     @Published private(set) var syncedIDs: Set<String>
+    /// 每次從背景回到前景就加一，縮圖格看它變了就重載。
+    @Published private(set) var foregroundGeneration = 0
+    private var wasInBackground = false
 
     private let logStore: SyncLogStore
     private let syncedStore: SyncedIDStore
@@ -127,8 +130,17 @@ final class AppModel: ObservableObject {
     }
 
     func didEnterBackground() {
+        wasInBackground = true
         pruneLogsInBackground()
         scheduleBackgroundSyncIfEnabled()
+    }
+
+    /// 在背景時可能拍了新照片，回來要重讀相簿。
+    func didBecomeActive() {
+        guard wasInBackground else { return }
+        wasInBackground = false
+        foregroundGeneration += 1
+        Task { await loadAlbums() }
     }
 
     func start() {
